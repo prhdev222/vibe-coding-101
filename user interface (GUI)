@@ -1,363 +1,374 @@
-from pathlib import Path
+import statistics
+from typing import Dict, List, Optional, Tuple
 
-src = Path("/mnt/data/app01-console-memory-updated.py")
-dst = Path("/mnt/data/diabetes-risk-gui.py")
+import streamlit as st
 
-text = src.read_text(encoding="utf-8")
 
-start = text.index("# =====================================================================\n# 3. PRESENTATION LAYER (VIEWS)")
-end = text.index("# =====================================================================\n# AUTOMATED 3-TIER TEST SUITE")
-
-replacement = '''# =====================================================================
-# 3. PRESENTATION LAYER (GUI VIEW)
 # =====================================================================
-import tkinter as tk
-from tkinter import ttk, messagebox
+# 1. DATA ACCESS LAYER (MODEL)
+# =====================================================================
+class PatientModel:
+    """Manages in-memory patient data and basic data cleaning."""
 
-
-class DiabetesRiskGUI:
-    """Tkinter-based presentation layer for the Diabetes Risk Scoring System."""
-
-    def __init__(self, model: Any, service: ClinicalRiskService):
-        self.model = model
-        self.service = service
-        self.current_patient_id: Optional[int] = None
-
-        self.root = tk.Tk()
-        self.root.title("Diabetes Risk Scoring System")
-        self.root.geometry("720x720")
-        self.root.minsize(680, 650)
-
-        self.metric_vars = {
-            "Glucose": tk.StringVar(),
-            "BMI": tk.StringVar(),
-            "Age": tk.StringVar(),
-            "BloodPressure": tk.StringVar(),
+    def __init__(self):
+        self._raw_patients: Dict[int, Dict[str, float]] = {
+            101: {
+                "Glucose": 95.0,
+                "BMI": 22.5,
+                "Age": 28.0,
+                "BloodPressure": 115.0,
+            },
+            102: {
+                "Glucose": 145.0,
+                "BMI": 0.0,
+                "Age": 54.0,
+                "BloodPressure": 135.0,
+            },
+            103: {
+                "Glucose": 112.0,
+                "BMI": 29.1,
+                "Age": 42.0,
+                "BloodPressure": 122.0,
+            },
+            104: {
+                "Glucose": 180.0,
+                "BMI": 36.4,
+                "Age": 61.0,
+                "BloodPressure": 142.0,
+            },
         }
+        self._clean_initial_data()
 
-        self.patient_var = tk.StringVar()
-        self.score_var = tk.StringVar(value="-")
-        self.category_var = tk.StringVar(value="-")
+    def _clean_initial_data(self) -> None:
+        valid_bmis = [
+            patient["BMI"]
+            for patient in self._raw_patients.values()
+            if patient["BMI"] > 0
+        ]
+        median_bmi = statistics.median(valid_bmis) if valid_bmis else 25.0
 
-        self._build_interface()
-        self._refresh_patient_list()
+        for metrics in self._raw_patients.values():
+            if metrics["BMI"] <= 0:
+                metrics["BMI"] = round(median_bmi, 1)
 
-    def _build_interface(self) -> None:
-        main = ttk.Frame(self.root, padding=20)
-        main.pack(fill="both", expand=True)
+    def get_all_ids(self) -> List[int]:
+        return sorted(self._raw_patients.keys())
 
-        ttk.Label(
-            main,
-            text="DIABETES RISK SCORING SYSTEM",
-            font=("Arial", 20, "bold"),
-        ).pack(pady=(0, 5))
+    def get_patient(self, patient_id: int) -> Optional[Dict[str, float]]:
+        patient = self._raw_patients.get(patient_id)
+        return patient.copy() if patient else None
 
-        ttk.Label(
-            main,
-            text="Clinical Risk Assessment",
-            font=("Arial", 11),
-        ).pack(pady=(0, 15))
+    def update_patient(
+        self,
+        patient_id: int,
+        updated_metrics: Dict[str, float],
+    ) -> bool:
+        if patient_id in self._raw_patients:
+            self._raw_patients[patient_id].update(updated_metrics)
+            return True
+        return False
 
-        ttk.Separator(main, orient="horizontal").pack(fill="x", pady=(0, 15))
 
-        patient_frame = ttk.LabelFrame(main, text=" Patient Selection ", padding=15)
-        patient_frame.pack(fill="x", pady=8)
+# =====================================================================
+# 2. BUSINESS LOGIC LAYER (UNCHANGED)
+# =====================================================================
+class ClinicalRiskService:
+    """Handles clinical decision rules, point scoring, and risk categorization."""
 
-        ttk.Label(patient_frame, text="Patient ID:").grid(
-            row=0, column=0, sticky="w", padx=(0, 10)
+    THRESHOLDS = {
+        "Glucose": (100.0, 125.0),
+        "BMI": (25.0, 29.9),
+        "Age": (35.0, 55.0),
+        "BloodPressure": (120.0, 130.0),
+    }
+
+    def calculate_metric_score(self, metric_name: str, value: float) -> int:
+        if metric_name not in self.THRESHOLDS:
+            return 0
+
+        low_max, med_max = self.THRESHOLDS[metric_name]
+
+        if value <= low_max:
+            return 0
+        elif value <= med_max:
+            return 1
+        return 2
+
+    def evaluate_patient_risk(
+        self,
+        metrics: Dict[str, float],
+    ) -> Tuple[int, str]:
+        total_score = sum(
+            self.calculate_metric_score(metric, value)
+            for metric, value in metrics.items()
         )
 
-        self.patient_combo = ttk.Combobox(
-            patient_frame,
-            textvariable=self.patient_var,
-            state="readonly",
-            width=18,
-        )
-        self.patient_combo.grid(row=0, column=1, sticky="w")
-        self.patient_combo.bind("<<ComboboxSelected>>", self._on_patient_selected)
-
-        ttk.Button(
-            patient_frame,
-            text="Load Patient",
-            command=self.load_selected_patient,
-        ).grid(row=0, column=2, padx=12)
-
-        input_frame = ttk.LabelFrame(main, text=" Clinical Measurements ", padding=15)
-        input_frame.pack(fill="x", pady=8)
-
-        labels = {
-            "Glucose": "Fasting Blood Glucose (mg/dL)",
-            "BMI": "BMI (kg/m²)",
-            "Age": "Age (years)",
-            "BloodPressure": "Blood Pressure (mmHg)",
-        }
-
-        for row, metric in enumerate(("Glucose", "BMI", "Age", "BloodPressure")):
-            ttk.Label(input_frame, text=labels[metric]).grid(
-                row=row, column=0, sticky="w", pady=7
-            )
-            ttk.Entry(
-                input_frame,
-                textvariable=self.metric_vars[metric],
-                width=22,
-            ).grid(row=row, column=1, sticky="w", padx=(20, 0), pady=7)
-
-        button_frame = ttk.Frame(main)
-        button_frame.pack(fill="x", pady=12)
-
-        ttk.Button(
-            button_frame,
-            text="Calculate Risk",
-            command=self.calculate_risk,
-        ).pack(side="left", padx=(0, 8))
-
-        ttk.Button(
-            button_frame,
-            text="Save Measurements",
-            command=self.save_measurements,
-        ).pack(side="left", padx=8)
-
-        ttk.Button(
-            button_frame,
-            text="Clear",
-            command=self.clear_form,
-        ).pack(side="left", padx=8)
-
-        report_frame = ttk.LabelFrame(main, text=" Diagnostic Risk Report ", padding=18)
-        report_frame.pack(fill="both", expand=True, pady=8)
-
-        ttk.Label(
-            report_frame,
-            text="***************************************",
-            font=("Courier", 11, "bold"),
-        ).pack()
-
-        ttk.Label(
-            report_frame,
-            text="DIAGNOSTIC RISK REPORT",
-            font=("Arial", 16, "bold"),
-        ).pack(pady=5)
-
-        ttk.Label(
-            report_frame,
-            text="---------------------------------------",
-            font=("Courier", 11),
-        ).pack()
-
-        result_grid = ttk.Frame(report_frame)
-        result_grid.pack(pady=15)
-
-        ttk.Label(
-            result_grid,
-            text="Patient ID:",
-            font=("Arial", 11, "bold"),
-        ).grid(row=0, column=0, sticky="e", padx=8, pady=6)
-
-        self.report_patient_label = ttk.Label(
-            result_grid,
-            text="-",
-            font=("Arial", 11),
-        )
-        self.report_patient_label.grid(row=0, column=1, sticky="w", padx=8)
-
-        ttk.Label(
-            result_grid,
-            text="Cumulative Score:",
-            font=("Arial", 11, "bold"),
-        ).grid(row=1, column=0, sticky="e", padx=8, pady=6)
-
-        ttk.Label(
-            result_grid,
-            textvariable=self.score_var,
-            font=("Arial", 11),
-        ).grid(row=1, column=1, sticky="w", padx=8)
-
-        ttk.Label(
-            result_grid,
-            text="Risk Category:",
-            font=("Arial", 11, "bold"),
-        ).grid(row=2, column=0, sticky="e", padx=8, pady=6)
-
-        self.category_label = ttk.Label(
-            result_grid,
-            textvariable=self.category_var,
-            font=("Arial", 12, "bold"),
-        )
-        self.category_label.grid(row=2, column=1, sticky="w", padx=8)
-
-        ttk.Label(
-            report_frame,
-            text="---------------------------------------",
-            font=("Courier", 11),
-        ).pack()
-
-        ttk.Label(
-            report_frame,
-            text="*** CONFIDENTIAL MEDICAL INFORMATION ***\\nFOR AUTHORIZED USE ONLY",
-            font=("Arial", 10, "bold"),
-            justify="center",
-        ).pack(pady=(10, 0))
-
-        ttk.Button(
-            main,
-            text="Exit",
-            command=self.root.destroy,
-        ).pack(pady=(10, 0))
-
-    def _refresh_patient_list(self) -> None:
-        ids = self.model.get_all_ids()
-        self.patient_combo["values"] = [str(patient_id) for patient_id in ids]
-        if ids and not self.patient_var.get():
-            self.patient_var.set(str(ids[0]))
-
-    def _on_patient_selected(self, _event=None) -> None:
-        self.load_selected_patient()
-
-    def load_selected_patient(self) -> None:
-        value = self.patient_var.get().strip()
-
-        if not value.isdigit():
-            messagebox.showerror("Invalid Patient ID", "Please select a valid Patient ID.")
-            return
-
-        patient_id = int(value)
-        patient = self.model.get_patient(patient_id)
-
-        if patient is None:
-            messagebox.showerror(
-                "Patient Not Found",
-                f"Patient ID {patient_id} does not exist in the database.",
-            )
-            return
-
-        self.current_patient_id = patient_id
-        self.report_patient_label.config(text=str(patient_id))
-
-        for metric, value in patient.items():
-            if metric in self.metric_vars:
-                self.metric_vars[metric].set(str(value))
-
-        self.score_var.set("-")
-        self.category_var.set("-")
-
-    def _get_metrics_from_form(self) -> Optional[Dict[str, float]]:
-        metrics: Dict[str, float] = {}
-
-        for metric, variable in self.metric_vars.items():
-            raw_value = variable.get().strip()
-
-            if raw_value == "":
-                messagebox.showerror(
-                    "Missing Value",
-                    f"Please enter a value for {metric}.",
-                )
-                return None
-
-            try:
-                value = float(raw_value)
-            except ValueError:
-                messagebox.showerror(
-                    "Invalid Value",
-                    f"{metric} must be a numeric value.",
-                )
-                return None
-
-            if value < 0:
-                messagebox.showerror(
-                    "Invalid Value",
-                    f"{metric} cannot be negative.",
-                )
-                return None
-
-            metrics[metric] = value
-
-        return metrics
-
-    def save_measurements(self) -> None:
-        if self.current_patient_id is None:
-            self.load_selected_patient()
-
-        if self.current_patient_id is None:
-            return
-
-        metrics = self._get_metrics_from_form()
-        if metrics is None:
-            return
-
-        if self.model.update_patient(self.current_patient_id, metrics):
-            messagebox.showinfo(
-                "Saved",
-                f"Measurements for Patient {self.current_patient_id} were updated successfully.",
-            )
+        if total_score <= 2:
+            category = "Low Risk"
+        elif total_score <= 5:
+            category = "Moderate Risk"
         else:
-            messagebox.showerror(
-                "Save Error",
-                "Unable to update the selected patient.",
-            )
+            category = "High Risk"
 
-    def calculate_risk(self) -> None:
-        if self.current_patient_id is None:
-            self.load_selected_patient()
-
-        if self.current_patient_id is None:
-            return
-
-        metrics = self._get_metrics_from_form()
-        if metrics is None:
-            return
-
-        self.model.update_patient(self.current_patient_id, metrics)
-
-        score, category = self.service.evaluate_patient_risk(metrics)
-
-        self.report_patient_label.config(text=str(self.current_patient_id))
-        self.score_var.set(f"{score} pts")
-        self.category_var.set(category.upper())
-
-    def clear_form(self) -> None:
-        self.current_patient_id = None
-        self.patient_var.set("")
-
-        for variable in self.metric_vars.values():
-            variable.set("")
-
-        self.report_patient_label.config(text="-")
-        self.score_var.set("-")
-        self.category_var.set("-")
-
-    def run(self) -> None:
-        self.root.mainloop()
+        return total_score, category
 
 
-'''
-
-new_text = text[:start] + replacement + text[end:]
-
-# Replace only the application entry point so it launches the GUI instead of ConsoleView/ConsoleController.
-entry_start = new_text.index("# =====================================================================\n# SYSTEM APPLICATION ENTRY POINT")
-new_entry = '''# =====================================================================
-# SYSTEM APPLICATION ENTRY POINT
 # =====================================================================
-if __name__ == "__main__":
-    if RUN_TEST_SUITE:
-        suite = RiskAssessmentTestSuite(
-            model_factory=PatientModel,
-            service_class=ClinicalRiskService
-        )
-        suite.run_all_tiers()
+# 3. STREAMLIT APP
+# =====================================================================
+st.set_page_config(
+    page_title="Diabetes Risk Scoring System",
+    page_icon="🩺",
+    layout="centered",
+)
 
-    db_model = PatientModel()
-    rules_service = ClinicalRiskService()
+st.markdown(
+    """
+    <style>
+        .main-title {
+            text-align: center;
+            font-size: 2.1rem;
+            font-weight: 800;
+            margin-bottom: 0.2rem;
+        }
 
-    app = DiabetesRiskGUI(
-        model=db_model,
-        service=rules_service
+        .subtitle {
+            text-align: center;
+            color: #666666;
+            margin-bottom: 1.5rem;
+        }
+
+        .report-box {
+            border: 2px solid #333333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            background-color: #fafafa;
+            font-family: monospace;
+        }
+
+        .report-title {
+            text-align: center;
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin: 8px 0;
+        }
+
+        .report-row {
+            font-size: 1.05rem;
+            margin: 8px 0;
+        }
+
+        .confidential {
+            margin-top: 18px;
+            text-align: center;
+            font-weight: 900;
+            border-top: 2px solid #333333;
+            border-bottom: 2px solid #333333;
+            padding: 12px 0;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="main-title">DIABETES RISK SCORING SYSTEM</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<div class="subtitle">Clinical Risk Assessment</div>',
+    unsafe_allow_html=True,
+)
+
+
+# =====================================================================
+# 4. SESSION STATE
+# =====================================================================
+if "model" not in st.session_state:
+    st.session_state.model = PatientModel()
+
+if "service" not in st.session_state:
+    st.session_state.service = ClinicalRiskService()
+
+if "selected_patient" not in st.session_state:
+    st.session_state.selected_patient = st.session_state.model.get_all_ids()[0]
+
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
+
+
+model: PatientModel = st.session_state.model
+service: ClinicalRiskService = st.session_state.service
+
+
+# =====================================================================
+# 5. PATIENT SELECTION
+# =====================================================================
+st.subheader("Patient Selection")
+
+patient_ids = model.get_all_ids()
+
+selected_patient = st.selectbox(
+    "Patient ID",
+    options=patient_ids,
+    index=patient_ids.index(st.session_state.selected_patient),
+)
+
+if selected_patient != st.session_state.selected_patient:
+    st.session_state.selected_patient = selected_patient
+    st.session_state.last_result = None
+
+patient = model.get_patient(selected_patient)
+
+if patient is None:
+    st.error("Patient not found.")
+    st.stop()
+
+
+# =====================================================================
+# 6. CLINICAL INPUTS
+# =====================================================================
+st.subheader("Clinical Measurements")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    glucose = st.number_input(
+        "Fasting Blood Glucose (mg/dL)",
+        min_value=0.0,
+        value=float(patient["Glucose"]),
+        step=1.0,
     )
-    app.run()
-'''
 
-new_text = new_text[:entry_start] + new_entry
-dst.write_text(new_text, encoding="utf-8")
+    age = st.number_input(
+        "Age (years)",
+        min_value=0.0,
+        value=float(patient["Age"]),
+        step=1.0,
+    )
 
-print(f"Created: {dst}")
-print(f"Lines: {len(new_text.splitlines())}")
+with col2:
+    bmi = st.number_input(
+        "BMI (kg/m²)",
+        min_value=0.0,
+        value=float(patient["BMI"]),
+        step=0.1,
+    )
+
+    blood_pressure = st.number_input(
+        "Blood Pressure (mmHg)",
+        min_value=0.0,
+        value=float(patient["BloodPressure"]),
+        step=1.0,
+    )
+
+
+metrics = {
+    "Glucose": float(glucose),
+    "BMI": float(bmi),
+    "Age": float(age),
+    "BloodPressure": float(blood_pressure),
+}
+
+
+# =====================================================================
+# 7. ACTION BUTTONS
+# =====================================================================
+button_col1, button_col2 = st.columns(2)
+
+with button_col1:
+    calculate_clicked = st.button(
+        "Calculate Risk",
+        use_container_width=True,
+        type="primary",
+    )
+
+with button_col2:
+    save_clicked = st.button(
+        "Save Measurements",
+        use_container_width=True,
+    )
+
+
+if save_clicked:
+    updated = model.update_patient(selected_patient, metrics)
+
+    if updated:
+        st.success(
+            f"Measurements for Patient {selected_patient} were saved successfully."
+        )
+    else:
+        st.error("Unable to save measurements.")
+
+
+if calculate_clicked:
+    model.update_patient(selected_patient, metrics)
+    score, category = service.evaluate_patient_risk(metrics)
+
+    st.session_state.last_result = {
+        "patient_id": selected_patient,
+        "score": score,
+        "category": category,
+    }
+
+
+# =====================================================================
+# 8. DIAGNOSTIC RISK REPORT
+# =====================================================================
+if st.session_state.last_result is not None:
+    result = st.session_state.last_result
+
+    st.markdown(
+        f"""
+        <div class="report-box">
+            <div>********************************************************</div>
+            <div>--------------------------------------------------------</div>
+
+            <div class="report-title">DIAGNOSTIC RISK REPORT</div>
+            <div class="report-title" style="font-size:1rem;">
+                DIABETES RISK ASSESSMENT
+            </div>
+
+            <div>--------------------------------------------------------</div>
+            <div>********************************************************</div>
+
+            <div class="report-row">
+                <strong>Patient ID:</strong>
+                {result["patient_id"]}
+            </div>
+
+            <div class="report-row">
+                <strong>Cumulative Score:</strong>
+                {result["score"]} pts
+            </div>
+
+            <div class="report-row">
+                <strong>Risk Category:</strong>
+                {result["category"].upper()}
+            </div>
+
+            <div>--------------------------------------------------------</div>
+
+            <div class="confidential">
+                *** CONFIDENTIAL MEDICAL INFORMATION ***<br>
+                FOR AUTHORIZED USE ONLY
+            </div>
+
+            <div style="margin-top:10px;">
+                ********************************************************
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# =====================================================================
+# 9. FOOTER
+# =====================================================================
+st.divider()
+
+st.caption(
+    "Diabetes Risk Scoring System — demonstration clinical decision-support interface."
+)
