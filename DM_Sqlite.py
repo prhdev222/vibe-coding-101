@@ -395,3 +395,43 @@ st.caption("Persistent database: diabetes_patients.db (SQLite3)")
 st.caption(
     "Saved measurements remain available after the application is closed."
 )
+# =====================================================================
+# 10. LIVE SQLITE DATABASE STATE
+# =====================================================================
+st.divider()
+st.subheader("🗄️ Live SQLite Database State")
+
+with model._get_connection() as conn:
+    rows = conn.execute(
+        """
+        SELECT
+            patient_id,
+            Glucose,
+            BMI,
+            Age,
+            BloodPressure
+        FROM patients
+        ORDER BY patient_id
+        """
+    ).fetchall()
+
+database_table = [
+    {
+        "Patient ID": row[0],
+        "Glucose": row[1],
+        "BMI": row[2],
+        "Age": row[3],
+        "Blood Pressure": row[4],
+    }
+    for row in rows
+]
+
+st.dataframe(
+    database_table,
+    use_container_width=True,
+    hide_index=True,
+)
+
+if st.button("🔄 Refresh Database Table"):
+    st.rerun()
+    
