@@ -1,0 +1,363 @@
+from pathlib import Path
+
+src = Path("/mnt/data/app01-console-memory-updated.py")
+dst = Path("/mnt/data/diabetes-risk-gui.py")
+
+text = src.read_text(encoding="utf-8")
+
+start = text.index("# =====================================================================\n# 3. PRESENTATION LAYER (VIEWS)")
+end = text.index("# =====================================================================\n# AUTOMATED 3-TIER TEST SUITE")
+
+replacement = '''# =====================================================================
+# 3. PRESENTATION LAYER (GUI VIEW)
+# =====================================================================
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+
+class DiabetesRiskGUI:
+    """Tkinter-based presentation layer for the Diabetes Risk Scoring System."""
+
+    def __init__(self, model: Any, service: ClinicalRiskService):
+        self.model = model
+        self.service = service
+        self.current_patient_id: Optional[int] = None
+
+        self.root = tk.Tk()
+        self.root.title("Diabetes Risk Scoring System")
+        self.root.geometry("720x720")
+        self.root.minsize(680, 650)
+
+        self.metric_vars = {
+            "Glucose": tk.StringVar(),
+            "BMI": tk.StringVar(),
+            "Age": tk.StringVar(),
+            "BloodPressure": tk.StringVar(),
+        }
+
+        self.patient_var = tk.StringVar()
+        self.score_var = tk.StringVar(value="-")
+        self.category_var = tk.StringVar(value="-")
+
+        self._build_interface()
+        self._refresh_patient_list()
+
+    def _build_interface(self) -> None:
+        main = ttk.Frame(self.root, padding=20)
+        main.pack(fill="both", expand=True)
+
+        ttk.Label(
+            main,
+            text="DIABETES RISK SCORING SYSTEM",
+            font=("Arial", 20, "bold"),
+        ).pack(pady=(0, 5))
+
+        ttk.Label(
+            main,
+            text="Clinical Risk Assessment",
+            font=("Arial", 11),
+        ).pack(pady=(0, 15))
+
+        ttk.Separator(main, orient="horizontal").pack(fill="x", pady=(0, 15))
+
+        patient_frame = ttk.LabelFrame(main, text=" Patient Selection ", padding=15)
+        patient_frame.pack(fill="x", pady=8)
+
+        ttk.Label(patient_frame, text="Patient ID:").grid(
+            row=0, column=0, sticky="w", padx=(0, 10)
+        )
+
+        self.patient_combo = ttk.Combobox(
+            patient_frame,
+            textvariable=self.patient_var,
+            state="readonly",
+            width=18,
+        )
+        self.patient_combo.grid(row=0, column=1, sticky="w")
+        self.patient_combo.bind("<<ComboboxSelected>>", self._on_patient_selected)
+
+        ttk.Button(
+            patient_frame,
+            text="Load Patient",
+            command=self.load_selected_patient,
+        ).grid(row=0, column=2, padx=12)
+
+        input_frame = ttk.LabelFrame(main, text=" Clinical Measurements ", padding=15)
+        input_frame.pack(fill="x", pady=8)
+
+        labels = {
+            "Glucose": "Fasting Blood Glucose (mg/dL)",
+            "BMI": "BMI (kg/m²)",
+            "Age": "Age (years)",
+            "BloodPressure": "Blood Pressure (mmHg)",
+        }
+
+        for row, metric in enumerate(("Glucose", "BMI", "Age", "BloodPressure")):
+            ttk.Label(input_frame, text=labels[metric]).grid(
+                row=row, column=0, sticky="w", pady=7
+            )
+            ttk.Entry(
+                input_frame,
+                textvariable=self.metric_vars[metric],
+                width=22,
+            ).grid(row=row, column=1, sticky="w", padx=(20, 0), pady=7)
+
+        button_frame = ttk.Frame(main)
+        button_frame.pack(fill="x", pady=12)
+
+        ttk.Button(
+            button_frame,
+            text="Calculate Risk",
+            command=self.calculate_risk,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
+            button_frame,
+            text="Save Measurements",
+            command=self.save_measurements,
+        ).pack(side="left", padx=8)
+
+        ttk.Button(
+            button_frame,
+            text="Clear",
+            command=self.clear_form,
+        ).pack(side="left", padx=8)
+
+        report_frame = ttk.LabelFrame(main, text=" Diagnostic Risk Report ", padding=18)
+        report_frame.pack(fill="both", expand=True, pady=8)
+
+        ttk.Label(
+            report_frame,
+            text="***************************************",
+            font=("Courier", 11, "bold"),
+        ).pack()
+
+        ttk.Label(
+            report_frame,
+            text="DIAGNOSTIC RISK REPORT",
+            font=("Arial", 16, "bold"),
+        ).pack(pady=5)
+
+        ttk.Label(
+            report_frame,
+            text="---------------------------------------",
+            font=("Courier", 11),
+        ).pack()
+
+        result_grid = ttk.Frame(report_frame)
+        result_grid.pack(pady=15)
+
+        ttk.Label(
+            result_grid,
+            text="Patient ID:",
+            font=("Arial", 11, "bold"),
+        ).grid(row=0, column=0, sticky="e", padx=8, pady=6)
+
+        self.report_patient_label = ttk.Label(
+            result_grid,
+            text="-",
+            font=("Arial", 11),
+        )
+        self.report_patient_label.grid(row=0, column=1, sticky="w", padx=8)
+
+        ttk.Label(
+            result_grid,
+            text="Cumulative Score:",
+            font=("Arial", 11, "bold"),
+        ).grid(row=1, column=0, sticky="e", padx=8, pady=6)
+
+        ttk.Label(
+            result_grid,
+            textvariable=self.score_var,
+            font=("Arial", 11),
+        ).grid(row=1, column=1, sticky="w", padx=8)
+
+        ttk.Label(
+            result_grid,
+            text="Risk Category:",
+            font=("Arial", 11, "bold"),
+        ).grid(row=2, column=0, sticky="e", padx=8, pady=6)
+
+        self.category_label = ttk.Label(
+            result_grid,
+            textvariable=self.category_var,
+            font=("Arial", 12, "bold"),
+        )
+        self.category_label.grid(row=2, column=1, sticky="w", padx=8)
+
+        ttk.Label(
+            report_frame,
+            text="---------------------------------------",
+            font=("Courier", 11),
+        ).pack()
+
+        ttk.Label(
+            report_frame,
+            text="*** CONFIDENTIAL MEDICAL INFORMATION ***\\nFOR AUTHORIZED USE ONLY",
+            font=("Arial", 10, "bold"),
+            justify="center",
+        ).pack(pady=(10, 0))
+
+        ttk.Button(
+            main,
+            text="Exit",
+            command=self.root.destroy,
+        ).pack(pady=(10, 0))
+
+    def _refresh_patient_list(self) -> None:
+        ids = self.model.get_all_ids()
+        self.patient_combo["values"] = [str(patient_id) for patient_id in ids]
+        if ids and not self.patient_var.get():
+            self.patient_var.set(str(ids[0]))
+
+    def _on_patient_selected(self, _event=None) -> None:
+        self.load_selected_patient()
+
+    def load_selected_patient(self) -> None:
+        value = self.patient_var.get().strip()
+
+        if not value.isdigit():
+            messagebox.showerror("Invalid Patient ID", "Please select a valid Patient ID.")
+            return
+
+        patient_id = int(value)
+        patient = self.model.get_patient(patient_id)
+
+        if patient is None:
+            messagebox.showerror(
+                "Patient Not Found",
+                f"Patient ID {patient_id} does not exist in the database.",
+            )
+            return
+
+        self.current_patient_id = patient_id
+        self.report_patient_label.config(text=str(patient_id))
+
+        for metric, value in patient.items():
+            if metric in self.metric_vars:
+                self.metric_vars[metric].set(str(value))
+
+        self.score_var.set("-")
+        self.category_var.set("-")
+
+    def _get_metrics_from_form(self) -> Optional[Dict[str, float]]:
+        metrics: Dict[str, float] = {}
+
+        for metric, variable in self.metric_vars.items():
+            raw_value = variable.get().strip()
+
+            if raw_value == "":
+                messagebox.showerror(
+                    "Missing Value",
+                    f"Please enter a value for {metric}.",
+                )
+                return None
+
+            try:
+                value = float(raw_value)
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid Value",
+                    f"{metric} must be a numeric value.",
+                )
+                return None
+
+            if value < 0:
+                messagebox.showerror(
+                    "Invalid Value",
+                    f"{metric} cannot be negative.",
+                )
+                return None
+
+            metrics[metric] = value
+
+        return metrics
+
+    def save_measurements(self) -> None:
+        if self.current_patient_id is None:
+            self.load_selected_patient()
+
+        if self.current_patient_id is None:
+            return
+
+        metrics = self._get_metrics_from_form()
+        if metrics is None:
+            return
+
+        if self.model.update_patient(self.current_patient_id, metrics):
+            messagebox.showinfo(
+                "Saved",
+                f"Measurements for Patient {self.current_patient_id} were updated successfully.",
+            )
+        else:
+            messagebox.showerror(
+                "Save Error",
+                "Unable to update the selected patient.",
+            )
+
+    def calculate_risk(self) -> None:
+        if self.current_patient_id is None:
+            self.load_selected_patient()
+
+        if self.current_patient_id is None:
+            return
+
+        metrics = self._get_metrics_from_form()
+        if metrics is None:
+            return
+
+        self.model.update_patient(self.current_patient_id, metrics)
+
+        score, category = self.service.evaluate_patient_risk(metrics)
+
+        self.report_patient_label.config(text=str(self.current_patient_id))
+        self.score_var.set(f"{score} pts")
+        self.category_var.set(category.upper())
+
+    def clear_form(self) -> None:
+        self.current_patient_id = None
+        self.patient_var.set("")
+
+        for variable in self.metric_vars.values():
+            variable.set("")
+
+        self.report_patient_label.config(text="-")
+        self.score_var.set("-")
+        self.category_var.set("-")
+
+    def run(self) -> None:
+        self.root.mainloop()
+
+
+'''
+
+new_text = text[:start] + replacement + text[end:]
+
+# Replace only the application entry point so it launches the GUI instead of ConsoleView/ConsoleController.
+entry_start = new_text.index("# =====================================================================\n# SYSTEM APPLICATION ENTRY POINT")
+new_entry = '''# =====================================================================
+# SYSTEM APPLICATION ENTRY POINT
+# =====================================================================
+if __name__ == "__main__":
+    if RUN_TEST_SUITE:
+        suite = RiskAssessmentTestSuite(
+            model_factory=PatientModel,
+            service_class=ClinicalRiskService
+        )
+        suite.run_all_tiers()
+
+    db_model = PatientModel()
+    rules_service = ClinicalRiskService()
+
+    app = DiabetesRiskGUI(
+        model=db_model,
+        service=rules_service
+    )
+    app.run()
+'''
+
+new_text = new_text[:entry_start] + new_entry
+dst.write_text(new_text, encoding="utf-8")
+
+print(f"Created: {dst}")
+print(f"Lines: {len(new_text.splitlines())}")
